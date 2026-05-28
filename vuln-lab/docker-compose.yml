@@ -1,0 +1,140 @@
+###############################################################
+# 🛡️ VulnLab v3.0 — 취약점 분석 실습 환경
+#
+# ⚠️  경고: 이 환경은 의도적으로 취약하게 설계되었습니다.
+#     절대 인터넷에 직접 노출하지 마세요!
+#
+# 사용법:
+#   docker compose up -d                    # 기본 실행
+#   docker compose --profile attack up -d   # 공격 컨테이너 포함
+#   docker compose --profile mgmt up -d     # Portainer 포함
+#   docker compose exec attacker bash       # 공격 컨테이너 접속
+#   docker compose down -v                  # 전체 종료 + 볼륨 삭제
+###############################################################
+
+services:
+
+  # ── 01. 커스텀 취약 Flask 앱 (취약점 13종) ────────────────
+  vuln-app:
+    build: ./vuln-app
+    container_name: vulnlab-custom
+    ports:
+      - "127.0.0.1:5000:5000"
+    networks:
+      - vuln-net
+    restart: unless-stopped
+
+  # ── 02. DVWA ──────────────────────────────────────────────
+  dvwa:
+    image: ghcr.io/digininja/dvwa:latest
+    container_name: vulnlab-dvwa
+    environment:
+      - DB_SERVER=dvwa-db
+      - DB_DATABASE=dvwa
+      - DB_USERNAME=dvwa
+      - DB_PASSWORD=dvwa_pass
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      dvwa-db:
+        condition: service_healthy
+    networks:
+      - vuln-net
+    restart: unless-stopped
+
+  dvwa-db:
+    image: mariadb:11
+    container_name: vulnlab-dvwa-db
+    environment:
+      MARIADB_ROOT_PASSWORD: root_pass
+      MARIADB_DATABASE: dvwa
+      MARIADB_USER: dvwa
+      MARIADB_PASSWORD: dvwa_pass
+    volumes:
+      - dvwa-db-data:/var/lib/mysql
+    networks:
+      - vuln-net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── 03. WebGoat ───────────────────────────────────────────
+  webgoat:
+    image: webgoat/webgoat:v2023.8
+    container_name: vulnlab-webgoat
+    ports:
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:9090:9090"
+    environment:
+      - WEBGOAT_HOST=0.0.0.0
+      - WEBWOLF_HOST=0.0.0.0
+      - WEBGOAT_PORT=8080
+      - WEBWOLF_PORT=9090
+    networks:
+      - vuln-net
+    restart: unless-stopped
+
+  # ── 04. Juice Shop ────────────────────────────────────────
+  juice-shop:
+    image: bkimminich/juice-shop:v17.1.1
+    container_name: vulnlab-juiceshop
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - vuln-net
+    restart: unless-stopped
+
+  # ── 05. Log4Shell (CVE-2021-44228) ───────────────────────
+  # Log4j 2.14.1 기반 취약 Spring Boot 앱
+  # X-Api-Version / User-Agent 헤더로 JNDI 페이로드 전달
+  log4shell:
+    image: ghcr.io/christophetd/log4shell-vulnerable-app:latest
+    container_name: vulnlab-log4shell
+    ports:
+      - "127.0.0.1:8082:8080"
+    networks:
+      - vuln-net
+    restart: unless-stopped
+
+  # ── 06. 공격용 컨테이너 ───────────────────────────────────
+  attacker:
+    build: ./attacker
+    container_name: vulnlab-attacker
+    networks:
+      - vuln-net
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./workspace:/workspace/shared
+    restart: "no"
+    profiles:
+      - attack
+
+  # ── 07. Portainer (선택) ──────────────────────────────────
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: vulnlab-portainer
+    ports:
+      - "127.0.0.1:9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    networks:
+      - vuln-net
+    restart: unless-stopped
+    profiles:
+      - mgmt
+
+networks:
+  vuln-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+volumes:
+  dvwa-db-data:
+  portainer-data:
